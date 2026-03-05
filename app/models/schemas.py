@@ -86,6 +86,43 @@ class CopilotResponse(BaseModel):
     priority: Priority
     next_actions: list[str] = Field(..., min_length=1)
     draft_reply: str = Field(..., min_length=1, max_length=500)
+    needs_review: bool = False
+    reply_is_draft: bool = False
     classifier_used: Literal["lmstudio", "rules"]
     latency_ms: int = Field(..., ge=0)
     request_id: str = Field(..., min_length=1)
+
+
+class ReviewQueueItem(BaseModel):
+    request_id: str
+    text: str
+    category: Category | None = None
+    confidence: float | None = None
+    suggested_reply: str | None = None
+    classifier_name: str
+    latency_ms: int
+    ok: bool
+    error_message: str | None = None
+    needs_review: bool
+    final_category: Category | None = None
+    final_reply: str | None = None
+    reviewed_at: str | None = None
+    created_at: str
+
+
+class ReviewSubmitRequest(BaseModel):
+    final_category: Category
+    final_reply: str = Field(..., min_length=1, max_length=500)
+
+    @field_validator("final_reply")
+    @classmethod
+    def final_reply_cannot_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("final_reply must not be blank")
+        return value.strip()
+
+
+class ReviewSubmitResponse(BaseModel):
+    request_id: str
+    status: Literal["reviewed"] = "reviewed"
+    reviewed_at: str

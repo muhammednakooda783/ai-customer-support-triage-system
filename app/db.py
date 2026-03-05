@@ -24,10 +24,18 @@ def init_db(db_path: str) -> None:
                 latency_ms INTEGER NOT NULL,
                 ok INTEGER NOT NULL,
                 error_message TEXT,
+                needs_review INTEGER NOT NULL DEFAULT 0,
+                final_category TEXT,
+                final_reply TEXT,
+                reviewed_at TEXT,
                 created_at TEXT NOT NULL
             )
             """
         )
+        _ensure_column(conn, "classifications", "needs_review", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "classifications", "final_category", "TEXT")
+        _ensure_column(conn, "classifications", "final_reply", "TEXT")
+        _ensure_column(conn, "classifications", "reviewed_at", "TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_classifications_created_at "
             "ON classifications(created_at)"
@@ -40,6 +48,10 @@ def init_db(db_path: str) -> None:
             "ON classifications(classifier_name)"
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_classifications_ok ON classifications(ok)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_classifications_review "
+            "ON classifications(needs_review, final_category)"
+        )
 
 
 def insert_classification(
@@ -53,14 +65,19 @@ def insert_classification(
     ok: bool,
     error_message: str | None,
     created_at: str,
+    needs_review: bool = False,
+    final_category: str | None = None,
+    final_reply: str | None = None,
+    reviewed_at: str | None = None,
 ) -> None:
     with _connect() as conn:
         conn.execute(
             """
             INSERT INTO classifications (
                 request_id, text, category, confidence, suggested_reply,
-                classifier_name, latency_ms, ok, error_message, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                classifier_name, latency_ms, ok, error_message,
+                needs_review, final_category, final_reply, reviewed_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -72,6 +89,10 @@ def insert_classification(
                 latency_ms,
                 1 if ok else 0,
                 error_message,
+                1 if needs_review else 0,
+                final_category,
+                final_reply,
+                reviewed_at,
                 created_at,
             ),
         )
@@ -87,7 +108,8 @@ def get_recent(
     safe_limit = max(1, min(100, int(limit)))
     query = """
         SELECT request_id, text, category, confidence, suggested_reply,
-               classifier_name, latency_ms, ok, error_message, created_at
+               classifier_name, latency_ms, ok, error_message,
+               needs_review, final_category, final_reply, reviewed_at, created_at
         FROM classifications
         WHERE 1=1
     """
@@ -126,7 +148,7 @@ def get_stats(window_minutes: int = 60) -> dict:
         rows = conn.execute(
             """
             SELECT request_id, category, confidence, classifier_name, latency_ms, ok,
-                   error_message, created_at
+                   error_message, needs_review, created_at
             FROM classifications
             WHERE created_at >= ?
             ORDER BY created_at DESC
@@ -171,9 +193,52 @@ def get_stats(window_minutes: int = 60) -> dict:
         "avg_confidence": round(avg_confidence, 4),
         "category_counts": dict(category_counts),
         "classifier_counts": dict(classifier_counts),
+        "needs_review_count": sum(1 for row in rows if bool(row["needs_review"])),
         "errors_last_10": errors_last_10,
         "last_updated_iso": datetime.now(UTC).isoformat(),
     }
+
+
+def get_review_queue(limit: int = 20) -> list[dict]:
+    safe_limit = max(1, min(100, int(limit)))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT request_id, text, category, confidence, suggested_reply,
+                   classifier_name, latency_ms, ok, error_message,
+                   needs_review, final_category, final_reply, reviewed_at, created_at
+            FROM classifications
+            WHERE needs_review = 1
+              AND final_category IS NULL
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [_row_to_dict(row) for row in rows]
+
+
+def submit_review(
+    request_id: str,
+    final_category: str,
+    final_reply: str,
+    reviewed_at: str,
+) -> bool:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE classifications
+            SET final_category = ?,
+                final_reply = ?,
+                reviewed_at = ?,
+                needs_review = 0
+            WHERE request_id = ?
+              AND needs_review = 1
+              AND final_category IS NULL
+            """,
+            (final_category, final_reply, reviewed_at, request_id),
+        )
+        return cursor.rowcount > 0
 
 
 def _connect() -> sqlite3.Connection:
@@ -195,5 +260,16 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "latency_ms": int(row["latency_ms"]),
         "ok": bool(row["ok"]),
         "error_message": row["error_message"],
+        "needs_review": bool(row["needs_review"]),
+        "final_category": row["final_category"],
+        "final_reply": row["final_reply"],
+        "reviewed_at": row["reviewed_at"],
         "created_at": str(row["created_at"]),
     }
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    existing = {str(row["name"]) for row in rows}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

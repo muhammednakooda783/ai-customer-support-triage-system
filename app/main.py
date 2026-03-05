@@ -18,7 +18,14 @@ from app.core.config import (
 )
 from app.core.metrics import InMemoryMetrics
 from app.core.rate_limit import InMemoryRateLimiter
-from app.db import get_recent, get_stats, init_db, insert_classification
+from app.db import (
+    get_recent,
+    get_review_queue,
+    get_stats,
+    init_db,
+    insert_classification,
+    submit_review,
+)
 from app.models.schemas import (
     BatchClassifyRequest,
     BatchClassifyResponse,
@@ -31,6 +38,9 @@ from app.models.schemas import (
     InfoResponse,
     IntentResult,
     MetricsResponse,
+    ReviewQueueItem,
+    ReviewSubmitRequest,
+    ReviewSubmitResponse,
 )
 from app.services.classifier import MessageClassifier, RulesClassifier
 from app.services.copilot import LMStudioDraftService, SupportCopilotService
@@ -154,6 +164,26 @@ async def stats(window_minutes: int = Query(default=60, ge=1, le=1440)) -> dict[
     return get_stats(window_minutes=window_minutes)
 
 
+@app.get("/review", response_model=list[ReviewQueueItem])
+async def review_queue(limit: int = Query(default=20, ge=1, le=100)) -> list[ReviewQueueItem]:
+    rows = get_review_queue(limit=limit)
+    return [ReviewQueueItem.model_validate(row) for row in rows]
+
+
+@app.post("/review/{request_id}", response_model=ReviewSubmitResponse)
+async def review_submit(request_id: str, payload: ReviewSubmitRequest) -> ReviewSubmitResponse:
+    reviewed_at = datetime.now(UTC).isoformat()
+    updated = submit_review(
+        request_id=request_id,
+        final_category=payload.final_category,
+        final_reply=payload.final_reply,
+        reviewed_at=reviewed_at,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Review item not found or already resolved")
+    return ReviewSubmitResponse(request_id=request_id, reviewed_at=reviewed_at)
+
+
 @app.post("/classify", response_model=ClassifyResponseWithMeta)
 async def classify(payload: ClassifyRequest, request: Request) -> ClassifyResponseWithMeta:
     classifier: MessageClassifier = app.state.classifier
@@ -186,6 +216,7 @@ async def classify(payload: ClassifyRequest, request: Request) -> ClassifyRespon
             classifier_used,
             latency_ms,
         )
+        needs_review = result.confidence < settings.review_threshold
         insert_classification(
             request_id=request_id,
             text=payload.text,
@@ -197,6 +228,7 @@ async def classify(payload: ClassifyRequest, request: Request) -> ClassifyRespon
             ok=ok,
             error_message=error_message,
             created_at=datetime.now(UTC).isoformat(),
+            needs_review=needs_review,
         )
         return ClassifyResponseWithMeta(
             category=result.category,
@@ -260,24 +292,46 @@ async def copilot(payload: CopilotRequest, request: Request) -> CopilotResponse:
         service = SupportCopilotService(classifier=classifier, draft_service=draft_service)
         result = await service.run(text=payload.text, channel=payload.channel)
         latency_ms = int((time.perf_counter() - started_at) * 1000)
-        metrics_store.increment(f"copilot_priority_{result.priority}_total")
+        needs_review = result.intent.confidence < settings.review_threshold
+        priority = result.priority
+        if needs_review:
+            priority = "high" if result.intent.category == "complaint" else "medium"
+
+        metrics_store.increment(f"copilot_priority_{priority}_total")
         metrics_store.increment(f"copilot_category_{result.intent.category}_total")
         logger.info(
-            "copilot_completed category=%s priority=%s classifier=%s draft_source=%s latency_ms=%d",
+            "copilot_completed category=%s priority=%s classifier=%s draft_source=%s "
+            "needs_review=%s latency_ms=%d",
             result.intent.category,
-            result.priority,
+            priority,
             result.classifier_used,
             result.draft_source,
+            needs_review,
             latency_ms,
+        )
+        insert_classification(
+            request_id=request_id,
+            text=payload.text,
+            category=result.intent.category,
+            confidence=result.intent.confidence,
+            suggested_reply=result.draft_reply,
+            classifier_name=result.classifier_used,
+            latency_ms=latency_ms,
+            ok=True,
+            error_message=None,
+            created_at=datetime.now(UTC).isoformat(),
+            needs_review=needs_review,
         )
         return CopilotResponse(
             intent=IntentResult(
                 category=result.intent.category,
                 confidence=result.intent.confidence,
             ),
-            priority=result.priority,
+            priority=priority,  # type: ignore[arg-type]
             next_actions=result.next_actions,
             draft_reply=result.draft_reply,
+            needs_review=needs_review,
+            reply_is_draft=needs_review,
             classifier_used=result.classifier_used,  # type: ignore[arg-type]
             latency_ms=latency_ms,
             request_id=request_id,

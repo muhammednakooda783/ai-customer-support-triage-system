@@ -113,6 +113,7 @@ LMSTUDIO_BASE_URL=http://localhost:1234/v1
 LMSTUDIO_API_KEY=lm-studio
 LMSTUDIO_MODEL=openai/gpt-oss-20b
 LMSTUDIO_TIMEOUT_SECONDS=20
+REVIEW_THRESHOLD=0.70
 ```
 
 ### 2) Run backend
@@ -140,6 +141,8 @@ Open `http://localhost:5173`.
 | `/metrics` | GET | In-memory counters |
 | `/recent` | GET | Recent classified requests with filters |
 | `/stats` | GET | Aggregate metrics window |
+| `/review` | GET | Items awaiting human review |
+| `/review/{request_id}` | POST | Submit reviewed category + final reply |
 | `/classify` | POST | Single message classification |
 | `/classify/batch` | POST | Batch classification |
 | `/copilot` | POST | Intent + priority + next actions + draft reply |

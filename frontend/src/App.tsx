@@ -65,6 +65,23 @@ type RecentRow = {
   created_at: string;
 };
 
+type ReviewRow = {
+  request_id: string;
+  text: string;
+  category: Category | null;
+  confidence: number | null;
+  suggested_reply: string | null;
+  classifier_name: string;
+  latency_ms: number;
+  ok: boolean;
+  error_message: string | null;
+  needs_review: boolean;
+  final_category: Category | null;
+  final_reply: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+};
+
 type BatchItem = {
   text: string;
   result: ClassifyResult;
@@ -125,6 +142,7 @@ function App() {
   const [info, setInfo] = useState<InfoResponse | null>(null);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [recentRows, setRecentRows] = useState<RecentRow[]>([]);
+  const [reviewRows, setReviewRows] = useState<ReviewRow[]>([]);
   const [isLivePaused, setIsLivePaused] = useState(false);
   const [toast, setToast] = useState("");
 
@@ -143,7 +161,12 @@ function App() {
     useState<(typeof CLASSIFIER_OPTIONS)[number]>("all");
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_OPTIONS)[number]>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [activityTab, setActivityTab] = useState<"recent" | "review">("recent");
   const [selectedRow, setSelectedRow] = useState<RecentRow | null>(null);
+  const [selectedReview, setSelectedReview] = useState<ReviewRow | null>(null);
+  const [reviewCategory, setReviewCategory] = useState<Category>("other");
+  const [reviewReply, setReviewReply] = useState("");
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
 
   const categoryChartData = useMemo(
     () =>
@@ -190,12 +213,14 @@ function App() {
 
   const refreshLiveData = async () => {
     try {
-      const [statsData, recentData] = await Promise.all([
+      const [statsData, recentData, reviewData] = await Promise.all([
         apiGet<StatsResponse>("/stats?window_minutes=60"),
-        apiGet<RecentRow[]>(recentQueryPath)
+        apiGet<RecentRow[]>(recentQueryPath),
+        apiGet<ReviewRow[]>("/review?limit=100")
       ]);
       setStats(statsData);
       setRecentRows(recentData);
+      setReviewRows(reviewData);
     } catch (error) {
       showToast(`Failed to refresh live data: ${(error as Error).message}`);
     }
@@ -216,6 +241,14 @@ function App() {
     }, POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [isLivePaused, recentQueryPath]);
+
+  useEffect(() => {
+    if (!selectedReview) {
+      return;
+    }
+    setReviewCategory(selectedReview.category ?? "other");
+    setReviewReply(selectedReview.suggested_reply ?? "");
+  }, [selectedReview]);
 
   const classifySingle = async () => {
     if (!singleMessage.trim()) {
@@ -316,6 +349,31 @@ function App() {
     }
   };
 
+  const submitReview = async () => {
+    if (!selectedReview) {
+      return;
+    }
+    if (!reviewReply.trim()) {
+      showToast("Reply cannot be blank.");
+      return;
+    }
+
+    setReviewSubmitting(true);
+    try {
+      await apiPost(`/review/${selectedReview.request_id}`, {
+        final_category: reviewCategory,
+        final_reply: reviewReply.trim()
+      });
+      showToast("Review saved.");
+      setSelectedReview(null);
+      await refreshLiveData();
+    } catch (error) {
+      showToast(`Review submit failed: ${(error as Error).message}`);
+    } finally {
+      setReviewSubmitting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 transition-colors dark:bg-slate-950 dark:text-slate-100">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-4 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
@@ -339,6 +397,9 @@ function App() {
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
               {info?.active_classifier ?? "unknown"}
               {info?.model ? ` (${info.model})` : ""}
+            </span>
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+              Needs review: {reviewRows.length}
             </span>
             <button
               type="button"
@@ -547,111 +608,186 @@ function App() {
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-soft dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
-              <h2 className="text-lg font-semibold">Recent Activity</h2>
+              <h2 className="text-lg font-semibold">Queue</h2>
               <p className="text-sm text-slate-500 dark:text-slate-400">
                 Auto-refresh every 5 seconds unless paused.
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <select
-                value={categoryFilter}
-                onChange={(event) =>
-                  setCategoryFilter(event.target.value as (typeof CATEGORY_OPTIONS)[number])
-                }
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
-              >
-                {CATEGORY_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    Category: {option}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={classifierFilter}
-                onChange={(event) =>
-                  setClassifierFilter(event.target.value as (typeof CLASSIFIER_OPTIONS)[number])
-                }
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
-              >
-                {CLASSIFIER_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    Classifier: {option}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value as (typeof STATUS_OPTIONS)[number])}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
-              >
-                {STATUS_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    Status: {option}
-                  </option>
-                ))}
-              </select>
-              <input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search text..."
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
-              />
+            <div className="flex items-center gap-2 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
               <button
                 type="button"
-                onClick={() => void refreshLiveData()}
-                className="rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-slate-300"
+                onClick={() => setActivityTab("recent")}
+                className={`rounded-md px-3 py-1 text-sm ${
+                  activityTab === "recent"
+                    ? "bg-white text-slate-900 dark:bg-slate-700 dark:text-white"
+                    : "text-slate-600 dark:text-slate-300"
+                }`}
               >
-                Refresh
+                Recent Activity
+              </button>
+              <button
+                type="button"
+                onClick={() => setActivityTab("review")}
+                className={`rounded-md px-3 py-1 text-sm ${
+                  activityTab === "review"
+                    ? "bg-white text-slate-900 dark:bg-slate-700 dark:text-white"
+                    : "text-slate-600 dark:text-slate-300"
+                }`}
+              >
+                Needs Review ({reviewRows.length})
               </button>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                <tr>
-                  <th className="px-2 py-2">Time</th>
-                  <th className="px-2 py-2">Category</th>
-                  <th className="px-2 py-2">Confidence</th>
-                  <th className="px-2 py-2">Latency</th>
-                  <th className="px-2 py-2">Classifier</th>
-                  <th className="px-2 py-2">Status</th>
-                  <th className="px-2 py-2">Text</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentRows.map((row) => (
-                  <tr
-                    key={row.request_id}
-                    onClick={() => setSelectedRow(row)}
-                    className="cursor-pointer border-b border-slate-100 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/40"
-                  >
-                    <td className="px-2 py-2">{formatTime(row.created_at)}</td>
-                    <td className="px-2 py-2 uppercase">{row.category ?? "-"}</td>
-                    <td className="px-2 py-2">
-                      {typeof row.confidence === "number"
-                        ? `${confidenceToPercent(row.confidence)}%`
-                        : "-"}
-                    </td>
-                    <td className="px-2 py-2">{row.latency_ms} ms</td>
-                    <td className="px-2 py-2">{row.classifier_name}</td>
-                    <td className="px-2 py-2">
-                      <span
-                        className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                          row.ok
-                            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                            : "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"
-                        }`}
+          {activityTab === "recent" && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <select
+                  value={categoryFilter}
+                  onChange={(event) =>
+                    setCategoryFilter(event.target.value as (typeof CATEGORY_OPTIONS)[number])
+                  }
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                >
+                  {CATEGORY_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      Category: {option}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={classifierFilter}
+                  onChange={(event) =>
+                    setClassifierFilter(event.target.value as (typeof CLASSIFIER_OPTIONS)[number])
+                  }
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                >
+                  {CLASSIFIER_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      Classifier: {option}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={statusFilter}
+                  onChange={(event) =>
+                    setStatusFilter(event.target.value as (typeof STATUS_OPTIONS)[number])
+                  }
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                >
+                  {STATUS_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      Status: {option}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search text..."
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                />
+                <button
+                  type="button"
+                  onClick={() => void refreshLiveData()}
+                  className="rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-slate-300"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                    <tr>
+                      <th className="px-2 py-2">Time</th>
+                      <th className="px-2 py-2">Category</th>
+                      <th className="px-2 py-2">Confidence</th>
+                      <th className="px-2 py-2">Latency</th>
+                      <th className="px-2 py-2">Classifier</th>
+                      <th className="px-2 py-2">Status</th>
+                      <th className="px-2 py-2">Text</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentRows.map((row) => (
+                      <tr
+                        key={row.request_id}
+                        onClick={() => setSelectedRow(row)}
+                        className="cursor-pointer border-b border-slate-100 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/40"
                       >
-                        {row.ok ? "ok" : "error"}
-                      </span>
-                    </td>
-                    <td className="px-2 py-2">{truncate(row.text)}</td>
+                        <td className="px-2 py-2">{formatTime(row.created_at)}</td>
+                        <td className="px-2 py-2 uppercase">{row.category ?? "-"}</td>
+                        <td className="px-2 py-2">
+                          {typeof row.confidence === "number"
+                            ? `${confidenceToPercent(row.confidence)}%`
+                            : "-"}
+                        </td>
+                        <td className="px-2 py-2">{row.latency_ms} ms</td>
+                        <td className="px-2 py-2">{row.classifier_name}</td>
+                        <td className="px-2 py-2">
+                          <span
+                            className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                              row.ok
+                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                                : "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"
+                            }`}
+                          >
+                            {row.ok ? "ok" : "error"}
+                          </span>
+                        </td>
+                        <td className="px-2 py-2">{truncate(row.text)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activityTab === "review" && (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead className="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                  <tr>
+                    <th className="px-2 py-2">Time</th>
+                    <th className="px-2 py-2">Category</th>
+                    <th className="px-2 py-2">Confidence</th>
+                    <th className="px-2 py-2">Classifier</th>
+                    <th className="px-2 py-2">Draft Reply</th>
+                    <th className="px-2 py-2">Text</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {reviewRows.map((row) => (
+                    <tr
+                      key={row.request_id}
+                      onClick={() => setSelectedReview(row)}
+                      className="cursor-pointer border-b border-amber-100 hover:bg-amber-50 dark:border-amber-900/30 dark:hover:bg-amber-950/20"
+                    >
+                      <td className="px-2 py-2">{formatTime(row.created_at)}</td>
+                      <td className="px-2 py-2 uppercase">{row.category ?? "-"}</td>
+                      <td className="px-2 py-2">
+                        {typeof row.confidence === "number"
+                          ? `${confidenceToPercent(row.confidence)}%`
+                          : "-"}
+                      </td>
+                      <td className="px-2 py-2">{row.classifier_name}</td>
+                      <td className="px-2 py-2">{truncate(row.suggested_reply ?? "-", 70)}</td>
+                      <td className="px-2 py-2">{truncate(row.text)}</td>
+                    </tr>
+                  ))}
+                  {reviewRows.length === 0 && (
+                    <tr>
+                      <td className="px-2 py-4 text-sm text-slate-500 dark:text-slate-400" colSpan={6}>
+                        No items currently need review.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </section>
 
@@ -695,6 +831,77 @@ function App() {
                 <Detail label="Error" value={selectedRow.error_message} pre />
               )}
             </dl>
+          </aside>
+        </div>
+      )}
+
+      {selectedReview && (
+        <div className="fixed inset-0 z-30 flex">
+          <button
+            type="button"
+            className="h-full w-full bg-black/40"
+            onClick={() => setSelectedReview(null)}
+            aria-label="Close review panel"
+          />
+          <aside className="h-full w-full max-w-md overflow-y-auto bg-white p-4 shadow-2xl dark:bg-slate-900">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Review Item</h3>
+              <button
+                type="button"
+                onClick={() => setSelectedReview(null)}
+                className="rounded-md border border-slate-300 px-2 py-1 text-sm dark:border-slate-700"
+              >
+                Close
+              </button>
+            </div>
+            <div className="space-y-3 text-sm">
+              <Detail label="Request ID" value={selectedReview.request_id} />
+              <Detail label="Original Category" value={selectedReview.category ?? "-"} />
+              <Detail
+                label="Confidence"
+                value={
+                  typeof selectedReview.confidence === "number"
+                    ? `${confidenceToPercent(selectedReview.confidence)}%`
+                    : "-"
+                }
+              />
+              <Detail label="Incoming Text" value={selectedReview.text} pre />
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
+                  Final Category
+                </span>
+                <select
+                  value={reviewCategory}
+                  onChange={(event) => setReviewCategory(event.target.value as Category)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                >
+                  {CATEGORY_OPTIONS.filter((option) => option !== "all").map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
+                  Final Reply
+                </span>
+                <textarea
+                  value={reviewReply}
+                  onChange={(event) => setReviewReply(event.target.value)}
+                  rows={6}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-200 focus:ring dark:border-slate-700 dark:bg-slate-950"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void submitReview()}
+                disabled={reviewSubmitting}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-300"
+              >
+                {reviewSubmitting ? "Submitting..." : "Submit review"}
+              </button>
+            </div>
           </aside>
         </div>
       )}
