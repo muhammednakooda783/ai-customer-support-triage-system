@@ -57,6 +57,7 @@ class MetricsResponse(BaseModel):
 class InfoResponse(BaseModel):
     active_classifier: str
     model: str | None = None
+    ticket_provider: str | None = None
     version: str
 
 
@@ -86,6 +87,35 @@ class CopilotResponse(BaseModel):
     priority: Priority
     next_actions: list[str] = Field(..., min_length=1)
     draft_reply: str = Field(..., min_length=1, max_length=500)
+    needs_review: bool = False
+    reply_is_draft: bool = False
+    classifier_used: Literal["lmstudio", "rules"]
+    latency_ms: int = Field(..., ge=0)
+    request_id: str = Field(..., min_length=1)
+
+
+class TicketTriageRequest(BaseModel):
+    ticket_id: str | None = Field(default=None, min_length=1, max_length=120)
+    subject: str = Field(..., min_length=1, max_length=300)
+    description: str = Field(..., min_length=1, max_length=4000)
+    channel: Channel = "webchat"
+    requester: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @field_validator("subject", "description")
+    @classmethod
+    def ticket_fields_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("field must not be blank")
+        return value.strip()
+
+
+class TicketTriageResponse(BaseModel):
+    ticket_id: str | None = None
+    intent: IntentResult
+    priority: Priority
+    next_actions: list[str] = Field(..., min_length=1)
+    draft_reply: str = Field(..., min_length=1, max_length=500)
+    assigned_team: str
     needs_review: bool = False
     reply_is_draft: bool = False
     classifier_used: Literal["lmstudio", "rules"]

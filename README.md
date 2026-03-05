@@ -10,6 +10,7 @@ It is designed for real-world reliability:
 - Uses a **local LM Studio model** for richer AI output.
 - Falls back to a deterministic **RulesClassifier** when LM output is unavailable/invalid.
 - Includes request tracing, metrics, rate limiting, persistence, tests, and CI.
+- Supports a **vendor-agnostic IT ticket triage flow** (`/tickets/triage`) so platform adapters (Zendesk/Freshdesk/etc.) can be added later.
 
 ## What This Solves
 
@@ -143,6 +144,8 @@ Open `http://localhost:5173`.
 | `/stats` | GET | Aggregate metrics window |
 | `/review` | GET | Items awaiting human review |
 | `/review/{request_id}` | POST | Submit reviewed category + final reply |
+| `/tickets/mock` | GET | Sample tickets from mock provider |
+| `/tickets/triage` | POST | Vendor-agnostic IT ticket triage + draft |
 | `/classify` | POST | Single message classification |
 | `/classify/batch` | POST | Batch classification |
 | `/copilot` | POST | Intent + priority + next actions + draft reply |
@@ -193,6 +196,14 @@ Example response:
   "latency_ms": 7012,
   "request_id": "ea291233-bf04-4d84-a3ed-6798b49f1d1a"
 }
+```
+
+### Example: `/tickets/triage`
+
+```bash
+curl -X POST http://127.0.0.1:8000/tickets/triage \
+  -H "Content-Type: application/json" \
+  -d '{"ticket_id":"INC-902","subject":"Refund dispute","description":"I will file a chargeback with my bank.","channel":"email"}'
 ```
 
 ## Reliability and Fallback Behavior

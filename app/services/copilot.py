@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,6 +17,17 @@ logger = logging.getLogger(__name__)
 LMSTUDIO_BASE_URL = "http://localhost:1234/v1"
 LMSTUDIO_API_KEY = "lm-studio"
 LMSTUDIO_MODEL = "openai/gpt-oss-20b"
+SEVERITY_PATTERNS = [
+    r"\bchargeback\b",
+    r"\blegal\b",
+    r"\blawsuit\b",
+    r"\battorney\b",
+    r"\blawyer\b",
+    r"\bbank\b",
+    r"\bfraud\b",
+    r"\bpolice\b",
+    r"\bregulator\b",
+]
 
 
 @dataclass(frozen=True)
@@ -213,3 +225,27 @@ def build_templated_draft_reply(category: Category, channel: Channel) -> str:
         "other": "Could you share a bit more detail so we can assist?",
     }[category]
     return f"{prefix} {body}"
+
+
+def is_severe_message(text: str, category: Category) -> bool:
+    if category != "complaint":
+        return False
+    normalized = text.strip().lower()
+    return any(re.search(pattern, normalized) for pattern in SEVERITY_PATTERNS)
+
+
+def assign_team(category: Category, severe: bool = False) -> str:
+    if severe and category == "complaint":
+        return "escalations"
+    teams = {
+        "question": "support-l1",
+        "complaint": "support-resolution",
+        "sales": "sales",
+        "spam": "trust-safety",
+        "other": "support-l1",
+    }
+    return teams[category]
+
+
+def build_ticket_text(subject: str, description: str) -> str:
+    return f"Subject: {subject.strip()}\nDescription: {description.strip()}"

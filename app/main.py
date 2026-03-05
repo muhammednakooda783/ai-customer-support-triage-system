@@ -41,10 +41,19 @@ from app.models.schemas import (
     ReviewQueueItem,
     ReviewSubmitRequest,
     ReviewSubmitResponse,
+    TicketTriageRequest,
+    TicketTriageResponse,
 )
 from app.services.classifier import MessageClassifier, RulesClassifier
-from app.services.copilot import LMStudioDraftService, SupportCopilotService
+from app.services.copilot import (
+    LMStudioDraftService,
+    SupportCopilotService,
+    assign_team,
+    build_ticket_text,
+    is_severe_message,
+)
 from app.services.lmstudio_classifier import LMStudioClassifier
+from app.services.ticket_provider import MockTicketProvider, TicketProvider
 
 configure_logging()
 settings = get_settings()
@@ -76,6 +85,7 @@ app.state.rate_limiter = InMemoryRateLimiter(
     max_requests=settings.rate_limit_requests,
     window_seconds=settings.rate_limit_window_seconds,
 )
+app.state.ticket_provider = MockTicketProvider()
 init_db(settings.db_path)
 app.state.db_path = settings.db_path
 
@@ -133,9 +143,11 @@ async def info() -> InfoResponse:
     classifier = app.state.classifier
     active_classifier = "lmstudio" if isinstance(classifier, LMStudioClassifier) else "rules"
     model = classifier.model if isinstance(classifier, LMStudioClassifier) else None
+    provider: TicketProvider = app.state.ticket_provider
     return InfoResponse(
         active_classifier=active_classifier,
         model=model,
+        ticket_provider=type(provider).__name__,
         version=settings.app_version,
     )
 
@@ -184,6 +196,89 @@ async def review_submit(request_id: str, payload: ReviewSubmitRequest) -> Review
     return ReviewSubmitResponse(request_id=request_id, reviewed_at=reviewed_at)
 
 
+@app.get("/tickets/mock")
+async def list_mock_tickets(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, str]]:
+    provider: TicketProvider = app.state.ticket_provider
+    records = provider.list_tickets(limit=limit)
+    return [
+        {
+            "ticket_id": row.ticket_id,
+            "subject": row.subject,
+            "description": row.description,
+            "channel": row.channel,
+            "requester": row.requester,
+        }
+        for row in records
+    ]
+
+
+@app.post("/tickets/triage", response_model=TicketTriageResponse)
+async def ticket_triage(payload: TicketTriageRequest, request: Request) -> TicketTriageResponse:
+    classifier: MessageClassifier = app.state.classifier
+    draft_service: LMStudioDraftService = app.state.draft_service
+    metrics_store: InMemoryMetrics = app.state.metrics
+    request_id = request.state.request_id
+    started_at = time.perf_counter()
+    metrics_store.increment("ticket_triage_requests_total")
+
+    text = build_ticket_text(payload.subject, payload.description)
+    try:
+        service = SupportCopilotService(classifier=classifier, draft_service=draft_service)
+        result = await service.run(text=text, channel=payload.channel)
+        latency_ms = int((time.perf_counter() - started_at) * 1000)
+        severe = is_severe_message(text, result.intent.category)
+        needs_review = result.intent.confidence < settings.review_threshold or severe
+        priority = result.priority
+        if needs_review:
+            priority = "high" if result.intent.category == "complaint" else "medium"
+
+        team = assign_team(result.intent.category, severe=severe)
+        metrics_store.increment(f"ticket_triage_category_{result.intent.category}_total")
+        metrics_store.increment(f"ticket_triage_priority_{priority}_total")
+        logger.info(
+            "ticket_triage_completed category=%s priority=%s team=%s needs_review=%s "
+            "classifier=%s latency_ms=%d",
+            result.intent.category,
+            priority,
+            team,
+            needs_review,
+            result.classifier_used,
+            latency_ms,
+        )
+        insert_classification(
+            request_id=request_id,
+            text=text,
+            category=result.intent.category,
+            confidence=result.intent.confidence,
+            suggested_reply=result.draft_reply,
+            classifier_name=result.classifier_used,
+            latency_ms=latency_ms,
+            ok=True,
+            error_message=None,
+            created_at=datetime.now(UTC).isoformat(),
+            needs_review=needs_review,
+        )
+        return TicketTriageResponse(
+            ticket_id=payload.ticket_id,
+            intent=IntentResult(
+                category=result.intent.category,
+                confidence=result.intent.confidence,
+            ),
+            priority=priority,  # type: ignore[arg-type]
+            next_actions=result.next_actions,
+            draft_reply=result.draft_reply,
+            assigned_team=team,
+            needs_review=needs_review,
+            reply_is_draft=needs_review,
+            classifier_used=result.classifier_used,  # type: ignore[arg-type]
+            latency_ms=latency_ms,
+            request_id=request_id,
+        )
+    except Exception as exc:
+        logger.exception("ticket_triage_failed reason=%s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Ticket triage failed") from exc
+
+
 @app.post("/classify", response_model=ClassifyResponseWithMeta)
 async def classify(payload: ClassifyRequest, request: Request) -> ClassifyResponseWithMeta:
     classifier: MessageClassifier = app.state.classifier
@@ -209,14 +304,16 @@ async def classify(payload: ClassifyRequest, request: Request) -> ClassifyRespon
         latency_ms = int((time.perf_counter() - started_at) * 1000)
         metrics_store.increment("classify_messages_total")
         metrics_store.increment(f"classify_category_{result.category}_total")
+        severe = is_severe_message(payload.text, result.category)
         logger.info(
-            "classify_completed category=%s confidence=%.2f classifier=%s latency_ms=%d",
+            "classify_completed category=%s confidence=%.2f classifier=%s severe=%s latency_ms=%d",
             result.category,
             result.confidence,
             classifier_used,
+            severe,
             latency_ms,
         )
-        needs_review = result.confidence < settings.review_threshold
+        needs_review = result.confidence < settings.review_threshold or severe
         insert_classification(
             request_id=request_id,
             text=payload.text,
@@ -292,7 +389,8 @@ async def copilot(payload: CopilotRequest, request: Request) -> CopilotResponse:
         service = SupportCopilotService(classifier=classifier, draft_service=draft_service)
         result = await service.run(text=payload.text, channel=payload.channel)
         latency_ms = int((time.perf_counter() - started_at) * 1000)
-        needs_review = result.intent.confidence < settings.review_threshold
+        severe = is_severe_message(payload.text, result.intent.category)
+        needs_review = result.intent.confidence < settings.review_threshold or severe
         priority = result.priority
         if needs_review:
             priority = "high" if result.intent.category == "complaint" else "medium"
@@ -301,12 +399,13 @@ async def copilot(payload: CopilotRequest, request: Request) -> CopilotResponse:
         metrics_store.increment(f"copilot_category_{result.intent.category}_total")
         logger.info(
             "copilot_completed category=%s priority=%s classifier=%s draft_source=%s "
-            "needs_review=%s latency_ms=%d",
+            "needs_review=%s severe=%s latency_ms=%d",
             result.intent.category,
             priority,
             result.classifier_used,
             result.draft_source,
             needs_review,
+            severe,
             latency_ms,
         )
         insert_classification(

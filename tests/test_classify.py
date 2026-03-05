@@ -35,6 +35,12 @@ async def post_classify_batch(texts: list[str]):
         return await client.post("/classify/batch", json={"texts": texts})
 
 
+async def get_review(limit: int = 20):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get(f"/review?limit={limit}")
+
+
 @pytest.mark.asyncio
 async def test_health_returns_ok():
     transport = ASGITransport(app=app)
@@ -234,6 +240,18 @@ async def test_stats_returns_required_keys():
         "last_updated_iso",
     }
     assert required_keys.issubset(body.keys())
+
+
+@pytest.mark.asyncio
+async def test_classify_severe_complaint_adds_item_to_review_queue():
+    response = await post_classify("I want a refund immediately or I will file a chargeback.")
+    assert response.status_code == 200
+    request_id = response.json()["request_id"]
+
+    review_response = await get_review(limit=20)
+    assert review_response.status_code == 200
+    items = review_response.json()
+    assert any(item["request_id"] == request_id for item in items)
 
 
 @pytest.mark.asyncio

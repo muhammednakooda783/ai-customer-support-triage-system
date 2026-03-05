@@ -120,6 +120,22 @@ async def test_low_confidence_result_sets_needs_review():
 
 
 @pytest.mark.asyncio
+async def test_severe_complaint_sets_needs_review_even_with_high_confidence():
+    settings.review_threshold = 0.70
+    response = await post_copilot(
+        "I want a refund immediately or I will file a chargeback with my bank."
+    )
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["intent"]["category"] == "complaint"
+    assert body["intent"]["confidence"] >= settings.review_threshold
+    assert body["needs_review"] is True
+    assert body["reply_is_draft"] is True
+    assert body["priority"] == "high"
+
+
+@pytest.mark.asyncio
 async def test_review_endpoint_returns_pending_items():
     settings.review_threshold = 0.99
     created = await post_copilot("How do I reset my password?")

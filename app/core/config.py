@@ -24,6 +24,7 @@ class Settings(BaseModel):
     rate_limit_window_seconds: int = Field(default=60)
     max_batch_size: int = Field(default=20)
     review_threshold: float = Field(default=0.70)
+    ticket_provider: str = Field(default="mock")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -40,6 +41,7 @@ class Settings(BaseModel):
             rate_limit_window_seconds=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")),
             max_batch_size=int(os.getenv("MAX_BATCH_SIZE", "20")),
             review_threshold=float(os.getenv("REVIEW_THRESHOLD", "0.70")),
+            ticket_provider=os.getenv("TICKET_PROVIDER", "mock"),
         )
 
 
