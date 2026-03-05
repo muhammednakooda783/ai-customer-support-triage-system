@@ -1,0 +1,57 @@
+<svg width="900" height="600" xmlns="http://www.w3.org/2000/svg" font-family="Arial">
+
+<style>
+.box { fill:#0f172a; stroke:#38bdf8; stroke-width:2; rx:10; }
+.text { fill:white; font-size:14px; text-anchor:middle; dominant-baseline:middle; }
+.arrow { stroke:#94a3b8; stroke-width:2; marker-end:url(#arrowhead); }
+</style>
+
+<defs>
+<marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+<polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"></polygon>
+</marker>
+</defs>
+
+<!-- Boxes -->
+
+<rect class="box" x="350" y="20" width="200" height="50"></rect>
+<text class="text" x="450" y="45">User Message</text>
+
+<rect class="box" x="350" y="100" width="200" height="50"></rect>
+<text class="text" x="450" y="125">InboxPilot Dashboard</text>
+
+<rect class="box" x="350" y="180" width="200" height="50"></rect>
+<text class="text" x="450" y="205">FastAPI /classify API</text>
+
+<rect class="box" x="350" y="260" width="200" height="50"></rect>
+<text class="text" x="450" y="285">Classifier Router</text>
+
+<rect class="box" x="150" y="360" width="220" height="60"></rect>
+<text class="text" x="260" y="390">LM Studio LLM</text>
+<text class="text" x="260" y="410">gpt-oss-20b</text>
+
+<rect class="box" x="530" y="360" width="220" height="60"></rect>
+<text class="text" x="640" y="395">Rules Classifier</text>
+
+<rect class="box" x="350" y="460" width="200" height="60"></rect>
+<text class="text" x="450" y="490">Structured JSON</text>
+<text class="text" x="450" y="510">Response</text>
+
+<rect class="box" x="350" y="540" width="200" height="50"></rect>
+<text class="text" x="450" y="565">Dashboard Metrics</text>
+
+<!-- Arrows -->
+
+<line class="arrow" x1="450" y1="70" x2="450" y2="100"></line>
+<line class="arrow" x1="450" y1="150" x2="450" y2="180"></line>
+<line class="arrow" x1="450" y1="230" x2="450" y2="260"></line>
+
+<line class="arrow" x1="450" y1="310" x2="260" y2="360"></line>
+<line class="arrow" x1="450" y1="310" x2="640" y2="360"></line>
+
+<line class="arrow" x1="260" y1="420" x2="450" y2="460"></line>
+<line class="arrow" x1="640" y1="420" x2="450" y2="460"></line>
+
+<line class="arrow" x1="450" y1="520" x2="450" y2="540"></line>
+
+</svg>
