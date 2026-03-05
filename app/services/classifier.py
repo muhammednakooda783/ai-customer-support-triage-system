@@ -40,7 +40,13 @@ class RulesClassifier:
         r"\bdamaged\b",
     ]
     sales_patterns = [
+        r"\bprice\b",
         r"\bpricing\b",
+        r"\bcost\b",
+        r"\bavailability\b",
+        r"\bdiscounts?\b",
+        r"\border(?:ing)?\b",
+        r"\bbulk orders?\b",
         r"\bquote\b",
         r"\bdemo\b",
         r"\bsubscription\b",

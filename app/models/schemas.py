@@ -24,6 +24,12 @@ class ClassifyResponse(BaseModel):
     suggested_reply: str = Field(..., min_length=1, max_length=500)
 
 
+class ClassifyResponseWithMeta(ClassifyResponse):
+    classifier_used: Literal["lmstudio", "rules"]
+    latency_ms: int = Field(..., ge=0)
+    request_id: str = Field(..., min_length=1)
+
+
 class BatchClassifyRequest(BaseModel):
     texts: list[str] = Field(..., min_length=1)
 
@@ -44,6 +50,12 @@ class BatchClassifyResponse(BaseModel):
 
 class MetricsResponse(BaseModel):
     counters: dict[str, int]
+
+
+class InfoResponse(BaseModel):
+    active_classifier: str
+    model: str | None = None
+    version: str
 
 
 class HealthResponse(BaseModel):

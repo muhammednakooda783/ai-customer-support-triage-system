@@ -13,11 +13,13 @@ load_dotenv()
 
 class Settings(BaseModel):
     app_name: str = Field(default="inboxpilot-lite")
+    app_version: str = Field(default="0.1.0")
     log_level: str = Field(default="INFO")
     lmstudio_base_url: str = Field(default="http://localhost:1234/v1")
     lmstudio_api_key: str = Field(default="lm-studio")
     lmstudio_model: str = Field(default="openai/gpt-oss-20b")
     lmstudio_timeout_seconds: float = Field(default=20.0)
+    db_path: str = Field(default="inboxpilot_lite.db")
     rate_limit_requests: int = Field(default=60)
     rate_limit_window_seconds: int = Field(default=60)
     max_batch_size: int = Field(default=20)
@@ -26,11 +28,13 @@ class Settings(BaseModel):
     def from_env(cls) -> "Settings":
         return cls(
             app_name=os.getenv("APP_NAME", "inboxpilot-lite"),
+            app_version=os.getenv("APP_VERSION", "0.1.0"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             lmstudio_base_url=os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
             lmstudio_api_key=os.getenv("LMSTUDIO_API_KEY", "lm-studio"),
             lmstudio_model=os.getenv("LMSTUDIO_MODEL", "openai/gpt-oss-20b"),
             lmstudio_timeout_seconds=float(os.getenv("LMSTUDIO_TIMEOUT_SECONDS", "20")),
+            db_path=os.getenv("DB_PATH", "inboxpilot_lite.db"),
             rate_limit_requests=int(os.getenv("RATE_LIMIT_REQUESTS", "60")),
             rate_limit_window_seconds=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")),
             max_batch_size=int(os.getenv("MAX_BATCH_SIZE", "20")),

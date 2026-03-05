@@ -3,11 +3,12 @@
 Production-quality starter API for classifying incoming messages with a local LM Studio model and a rules-based fallback.
 
 ## Features
-- FastAPI endpoints: `POST /classify`, `POST /classify/batch`, `GET /health`, `GET /metrics`
+- FastAPI endpoints: `POST /classify`, `POST /classify/batch`, `GET /health`, `GET /metrics`, `GET /recent`, `GET /stats`, `GET /info`
 - Categories: `question | complaint | sales | spam | other`
 - Request ID middleware with `x-request-id` propagation
 - In-memory per-IP rate limiting
 - In-memory metrics counters via `/metrics`
+- SQLite persistence (`sqlite3`) for request history and dashboard stats
 - Uses the OpenAI Python client against LM Studio's OpenAI-compatible API
 - Classifier selection:
   - Uses `LMStudioClassifier` (OpenAI-compatible local API)
@@ -60,6 +61,8 @@ cp .env.example .env
 - `LMSTUDIO_API_KEY` (default: `lm-studio`)
 - `LMSTUDIO_MODEL` (default: `openai/gpt-oss-20b`)
 - `LMSTUDIO_TIMEOUT_SECONDS` (default: `20`)
+- `DB_PATH` (default: `inboxpilot_lite.db`)
+- `APP_VERSION` (default: `0.1.0`)
 - `RATE_LIMIT_REQUESTS` (default: `60`)
 - `RATE_LIMIT_WINDOW_SECONDS` (default: `60`)
 - `MAX_BATCH_SIZE` (default: `20`)
@@ -86,7 +89,10 @@ FastAPI app (app/main.py)
   |
   +--> Routes
          - GET /health
+         - GET /info
          - GET /metrics
+         - GET /recent
+         - GET /stats
          - POST /classify
          - POST /classify/batch
                 |
@@ -133,8 +139,26 @@ Example classify response:
 {
   "category": "question",
   "confidence": 0.84,
-  "suggested_reply": "Thanks for your question. Share a bit more detail and I can help quickly."
+  "suggested_reply": "Thanks for your question. Share a bit more detail and I can help quickly.",
+  "classifier_used": "lmstudio",
+  "latency_ms": 132,
+  "request_id": "9f90dfca-c7fe-4f89-a761-b8aa2b0898c0"
 }
+```
+
+Recent rows:
+```bash
+curl "http://localhost:8000/recent?limit=20"
+```
+
+Stats:
+```bash
+curl "http://localhost:8000/stats?window_minutes=60"
+```
+
+Info:
+```bash
+curl http://localhost:8000/info
 ```
 
 ## Tooling
