@@ -1,4 +1,4 @@
-# inboxpilot-lite
+# AI Customer Support Triage System
 
 Production-quality starter API for classifying incoming messages with a local LM Studio model and a rules-based fallback.
 
