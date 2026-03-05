@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextvars import ContextVar, Token
 from functools import lru_cache
 
 from dotenv import load_dotenv
@@ -18,6 +19,9 @@ class Settings(BaseModel):
     openai_timeout_seconds: float = Field(default=8.0)
     openai_max_retries: int = Field(default=2)
     openai_retry_backoff_seconds: float = Field(default=0.4)
+    rate_limit_requests: int = Field(default=60)
+    rate_limit_window_seconds: int = Field(default=60)
+    max_batch_size: int = Field(default=20)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -29,16 +33,32 @@ class Settings(BaseModel):
             openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             openai_timeout_seconds=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "8")),
             openai_max_retries=int(os.getenv("OPENAI_MAX_RETRIES", "2")),
-            openai_retry_backoff_seconds=float(
-                os.getenv("OPENAI_RETRY_BACKOFF_SECONDS", "0.4")
-            ),
+            openai_retry_backoff_seconds=float(os.getenv("OPENAI_RETRY_BACKOFF_SECONDS", "0.4")),
+            rate_limit_requests=int(os.getenv("RATE_LIMIT_REQUESTS", "60")),
+            rate_limit_window_seconds=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")),
+            max_batch_size=int(os.getenv("MAX_BATCH_SIZE", "20")),
         )
+
+
+request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
+
+
+def get_request_id() -> str:
+    return request_id_ctx.get()
+
+
+def set_request_id(request_id: str) -> Token[str]:
+    return request_id_ctx.set(request_id)
+
+
+def reset_request_id(token: Token[str]) -> None:
+    request_id_ctx.reset(token)
 
 
 class RequestIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if not hasattr(record, "request_id"):
-            record.request_id = "-"
+            record.request_id = get_request_id()
         return True
 
 

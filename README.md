@@ -3,10 +3,15 @@
 Production-quality starter API for classifying incoming messages with an optional OpenAI path and a guaranteed rules-based fallback.
 
 ## Features
-- FastAPI service with two endpoints: `POST /classify`, `GET /health`
+- FastAPI service endpoints: `POST /classify`, `POST /classify/batch`, `GET /health`, `GET /metrics`
 - Categories: `question | complaint | sales | spam | other`
 - Confidence score from `0` to `1`
 - Suggested short helpful reply
+- Request ID middleware:
+  - Generates `x-request-id` when missing
+  - Propagates request ID into logs and response headers
+- In-memory counters exposed by `/metrics`
+- In-memory per-IP rate limiting
 - Classifier selection:
   - Uses `OpenAIClassifier` when `OPENAI_API_KEY` is configured
   - Falls back to `RulesClassifier` otherwise (or if OpenAI call fails)
@@ -17,11 +22,15 @@ Production-quality starter API for classifying incoming messages with an optiona
   - Retry with exponential backoff for transient failures
 - Structured-ish logging with timestamp, level, and `request_id`
 - Tests with `pytest` + `httpx`
+- CI via GitHub Actions (`pytest` + `ruff`)
+- Pre-commit hooks for lint and formatting (`ruff`, `ruff-format`)
 
 ## Project structure
 ```text
 app/
   core/config.py
+  core/metrics.py
+  core/rate_limit.py
   main.py
   models/schemas.py
   services/classifier.py
@@ -61,6 +70,38 @@ Set `OPENAI_API_KEY` only if you want LLM-backed classification.
 - `OPENAI_TIMEOUT_SECONDS` (default: `8`)
 - `OPENAI_MAX_RETRIES` (default: `2`)
 - `OPENAI_RETRY_BACKOFF_SECONDS` (default: `0.4`)
+- `RATE_LIMIT_REQUESTS` (default: `60`)
+- `RATE_LIMIT_WINDOW_SECONDS` (default: `60`)
+- `MAX_BATCH_SIZE` (default: `20`)
+
+## Architecture
+```text
+Client
+  |
+  v
+FastAPI app (app/main.py)
+  |
+  +--> Middleware:
+  |      - request_id context + response header
+  |      - per-IP rate limit
+  |      - request counters + structured logs
+  |
+  +--> Routes:
+         - GET /health
+         - GET /metrics
+         - POST /classify
+         - POST /classify/batch
+                |
+                v
+          Classifier service (app/services/classifier.py)
+                |
+                +--> OpenAIClassifier (if OPENAI_API_KEY exists)
+                |      - strict JSON schema
+                |      - Pydantic validation
+                |      - timeout + retry/backoff
+                |
+                +--> RulesClassifier fallback
+```
 
 ## Run locally
 ```bash
@@ -107,6 +148,18 @@ curl -X POST http://localhost:8000/classify \
   -d "{\"text\":\"How do I reset my password?\"}"
 ```
 
+Batch classify:
+```bash
+curl -X POST http://localhost:8000/classify/batch \
+  -H "Content-Type: application/json" \
+  -d "{\"texts\":[\"How can I upgrade?\", \"I need a refund\"]}"
+```
+
+Metrics:
+```bash
+curl http://localhost:8000/metrics
+```
+
 Example response:
 ```json
 {
@@ -127,6 +180,20 @@ Another valid response:
 
 ## Add new categories
 1. Update category literal in `app/models/schemas.py` (`Category`).
-2. Update `VALID_CATEGORIES` and rule logic in `app/services/classifier.py`.
+2. Update rule logic in `app/services/classifier.py`.
 3. If using OpenAI, update the prompt in `OpenAIClassifier._build_payload`.
 4. Add tests in `tests/test_classify.py` for the new category behavior.
+
+## Tooling
+Run pre-commit hooks locally:
+```bash
+pip install pre-commit
+pre-commit install
+pre-commit run --all-files
+```
+
+## Roadmap
+1. Persist metrics and rate-limit state in Redis for multi-instance deployments.
+2. Add OpenTelemetry traces and request-level latency histograms.
+3. Add authentication + API keys per tenant.
+4. Support async job queue for large batch classification.

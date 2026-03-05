@@ -1,23 +1,33 @@
 from __future__ import annotations
 
-import pytest
 import httpx
+import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.core.config import Settings
+from app.core.metrics import InMemoryMetrics
+from app.core.rate_limit import InMemoryRateLimiter
 from app.main import app
 from app.services.classifier import OpenAIClassifier, RulesClassifier, get_classifier
-from app.core.config import Settings
 
 
 @pytest.fixture(autouse=True)
 def force_rules_classifier() -> None:
     app.state.classifier = RulesClassifier()
+    app.state.metrics = InMemoryMetrics()
+    app.state.rate_limiter = InMemoryRateLimiter(max_requests=1000, window_seconds=60)
 
 
 async def post_classify(text: str):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         return await client.post("/classify", json={"text": text})
+
+
+async def post_classify_batch(texts: list[str]):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.post("/classify/batch", json={"texts": texts})
 
 
 @pytest.mark.asyncio
@@ -72,6 +82,72 @@ async def test_blank_text_returns_validation_error():
     assert response.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_request_id_is_generated_when_missing():
+    response = await post_classify("How does billing work?")
+    assert response.status_code == 200
+    assert "x-request-id" in response.headers
+    assert response.headers["x-request-id"]
+
+
+@pytest.mark.asyncio
+async def test_request_id_is_preserved_when_provided():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/classify",
+            headers={"x-request-id": "req-123"},
+            json={"text": "Can I get a demo?"},
+        )
+    assert response.status_code == 200
+    assert response.headers["x-request-id"] == "req-123"
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_returns_counters():
+    await post_classify("Hello there")
+    await post_classify_batch(["What is your pricing?", "I need a refund"])
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "counters" in body
+    counters = body["counters"]
+    assert counters["classify_requests_total"] == 1
+    assert counters["classify_batch_requests_total"] == 1
+    assert counters["classify_messages_total"] == 3
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_blocks_excess_requests():
+    app.state.rate_limiter = InMemoryRateLimiter(max_requests=1, window_seconds=60)
+    first = await post_classify("Question one?")
+    second = await post_classify("Question two?")
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json()["detail"] == "Rate limit exceeded. Try again later."
+
+
+@pytest.mark.asyncio
+async def test_classify_batch_success():
+    response = await post_classify_batch(["How do I upgrade?", "I want a refund"])
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["results"]) == 2
+    assert body["results"][0]["category"] == "question"
+    assert body["results"][1]["category"] == "complaint"
+
+
+@pytest.mark.asyncio
+async def test_classify_batch_rejects_oversized_batch():
+    response = await post_classify_batch(["hello"] * 21)
+    assert response.status_code == 400
+    assert "exceeds max allowed 20" in response.json()["detail"]
+
+
 def _openai_http_response(url: str, content: str, status_code: int = 200) -> httpx.Response:
     return httpx.Response(
         status_code=status_code,
@@ -91,7 +167,10 @@ async def test_openai_classifier_uses_strict_json_and_timeout(monkeypatch: pytes
         captured["timeout"] = timeout
         return _openai_http_response(
             url,
-            '{"category":"sales","confidence":0.91,"suggested_reply":"Thanks. I can share pricing options."}',
+            (
+                '{"category":"sales","confidence":0.91,'
+                '"suggested_reply":"Thanks. I can share pricing options."}'
+            ),
         )
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -132,7 +211,10 @@ async def test_openai_classifier_retries_transient_error(monkeypatch: pytest.Mon
             raise httpx.ReadTimeout("timed out")
         return _openai_http_response(
             url,
-            '{"category":"question","confidence":0.77,"suggested_reply":"Happy to help. Can you share more detail?"}',
+            (
+                '{"category":"question","confidence":0.77,'
+                '"suggested_reply":"Happy to help. Can you share more detail?"}'
+            ),
         )
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)

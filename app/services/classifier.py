@@ -18,8 +18,7 @@ TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
 class MessageClassifier(Protocol):
-    async def classify(self, text: str) -> ClassifyResponse:
-        ...
+    async def classify(self, text: str) -> ClassifyResponse: ...
 
 
 class RulesClassifier:
@@ -69,8 +68,12 @@ class RulesClassifier:
     def _build(self, category: Category, confidence: float) -> ClassifyResponse:
         replies: dict[Category, str] = {
             "question": "Thanks for your question. Share a bit more detail and I can help quickly.",
-            "complaint": "I'm sorry you had this experience. Please share details so we can resolve it.",
-            "sales": "Thanks for reaching out. Share your goals and budget and we can suggest a plan.",
+            "complaint": (
+                "I'm sorry you had this experience. Please share details so we can resolve it."
+            ),
+            "sales": (
+                "Thanks for reaching out. Share your goals and budget and we can suggest a plan."
+            ),
             "spam": "This message looks like spam. Reply with context if this was sent in error.",
             "other": "Thanks for your message. Could you clarify what you need help with?",
         }
@@ -122,14 +125,12 @@ class OpenAIClassifier:
                         attempt + 1,
                         wait_seconds,
                         type(exc).__name__,
-                        extra={"request_id": "-"},
                     )
                     await asyncio.sleep(wait_seconds)
                     continue
                 logger.warning(
                     "openai_classification_failed fallback=rules reason=%s",
                     type(exc).__name__,
-                    extra={"request_id": "-"},
                 )
                 return await self.fallback.classify(text)
 
@@ -177,11 +178,7 @@ class OpenAIClassifier:
         }
 
     def _parse_response(self, body: dict[str, object]) -> ClassifyResponse:
-        content = (
-            body.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "{}")
-        )
+        content = body.get("choices", [{}])[0].get("message", {}).get("content", "{}")
         output = OpenAIClassificationOutput.model_validate_json(
             self._extract_json(content if isinstance(content, str) else "{}")
         )
@@ -211,7 +208,6 @@ def get_classifier(settings: Settings) -> MessageClassifier:
     if settings.openai_api_key:
         logger.info(
             "classifier_selected type=OpenAIClassifier",
-            extra={"request_id": "-"},
         )
         return OpenAIClassifier(
             api_key=settings.openai_api_key,
@@ -223,6 +219,5 @@ def get_classifier(settings: Settings) -> MessageClassifier:
         )
     logger.info(
         "classifier_selected type=RulesClassifier",
-        extra={"request_id": "-"},
     )
     return rules_classifier
